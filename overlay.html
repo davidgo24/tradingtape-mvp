@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+  <body style="background: transparent; margin: 0;">
+    <div id="timer" style="
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      color: lightcoral;
+      font-size: 1.2em;
+      font-family: sans-serif;
+      transition: opacity 0.5s ease;
+      opacity: 1;
+    ">
+      ⏱ 00:00
+    </div>
+
+    <script>
+      const timerEl = document.getElementById('timer');
+      const ipcRenderer = window.ipc;
+
+      ipcRenderer.on('update-timer', (event, text) => {
+        timerEl.textContent = text;
+
+        // Fade in if hidden
+        timerEl.style.opacity = text.startsWith('⏱') ? '1' : '0';
+      });
+    </script>
+  </body>
+</html>

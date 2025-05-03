@@ -1,59 +1,64 @@
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const OBSWebSocket = require('obs-websocket-js').default;
 
-const obs = new OBSWebSocket();
+// -- 1. fileAPI: recording file handling --
+function getRecordingPath() {
+  const configPath = path.join(__dirname, 'config.json');
+  const defaultOBSPath = path.join(os.homedir(), 'Movies');
 
-let apiVersion = 5; // default assumption
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    return config.recordingFolder || defaultOBSPath;
+  } catch {
+    return defaultOBSPath;
+  }
+}
+
+contextBridge.exposeInMainWorld('fileAPI', {
+  getSessions: () => {
+    const folder = getRecordingPath();
+    const files = fs.readdirSync(folder);
+
+    return files
+      .filter(file => file.endsWith('.mov'))
+      .map(file => {
+        const fullPath = path.join(folder, file);
+        try {
+          const stats = fs.statSync(fullPath);
+          if (!stats.mtime) throw new Error('Invalid time');
+          return {
+            title: file.replace('.mov', ''),
+            path: fullPath,
+            date: stats.mtime
+          };
+        } catch (e) {
+          console.warn('Skipping invalid file:', file);
+          return null;
+        }
+      })
+      .filter(Boolean);
+  },
+
+  deleteSession: async (path) => ipcRenderer.invoke('delete-file', path)
+});
+
+// -- 2. obsControl: OBS WebSocket commands --
+const obs = new OBSWebSocket();
 
 contextBridge.exposeInMainWorld('obsControl', {
   connect: async () => {
-    try {
-      await obs.connect('ws://localhost:4455');
-      console.log("✅ Connected to OBS WebSocket");
-
-      // Try detecting API version
-      try {
-        const versionResponse = await obs.call('GetVersion');
-        console.log("📦 OBS WebSocket Version Info:", versionResponse);
-
-        if (versionResponse.obsWebSocketVersion?.startsWith("4")) {
-          apiVersion = 4;
-        } else {
-          apiVersion = 5;
-        }
-
-        console.log(`🔢 Detected WebSocket API version: ${apiVersion}`);
-      } catch (err) {
-        console.warn("⚠️ Could not determine version, defaulting to v5 format.", err);
-      }
-    } catch (err) {
-      console.error("❌ Failed to connect:", err);
-    }
+    await obs.connect('ws://localhost:4455');
+    ipcRenderer.send('status-update', '✅ Connected to OBS');
   },
+  startRecording: () => obs.call('StartRecord', {}),
+  stopRecording: () => obs.call('StopRecord', {})
+});
 
-  startRecording: async () => {
-    try {
-      if (apiVersion === 4) {
-        await obs.call('StartRecording', {});
-      } else {
-        await obs.call('StartRecord', {});
-      }
-    } catch (err) {
-      console.error("❌ StartRecording Error:", err);
-      throw err;
-    }
-  },
-
-  stopRecording: async () => {
-    try {
-      if (apiVersion === 4) {
-        await obs.call('StopRecording', {});
-      } else {
-        await obs.call('StopRecord', {});
-      }
-    } catch (err) {
-      console.error("❌ StopRecording Error:", err);
-      throw err;
-    }
-  }
+// -- 3. ipc bridge: generic IPC helpers --
+contextBridge.exposeInMainWorld('ipc', {
+  on: (...args) => ipcRenderer.on(...args),
+  send: (...args) => ipcRenderer.send(...args)
 });
